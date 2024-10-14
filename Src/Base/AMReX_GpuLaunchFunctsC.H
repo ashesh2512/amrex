@@ -5,6 +5,25 @@
 namespace amrex {
 
 namespace detail {
+
+    // call_f_scalar_handler
+    
+    template <typename F, typename N>
+    AMREX_FORCE_INLINE
+    auto call_f_scalar_handler (F const& f, N i)
+        noexcept -> decltype(f(0))
+    {
+        f(i);
+    }
+
+    template <typename F, typename N>
+    AMREX_FORCE_INLINE
+    auto call_f_scalar_handler (F const& f, N i)
+        noexcept -> decltype(f(0,Gpu::Handler{}))
+    {
+        f(i, Gpu::Handler{});
+    }
+    
     template <typename F, typename N>
     AMREX_GPU_DEVICE
     auto call_f (F const& f, N i)

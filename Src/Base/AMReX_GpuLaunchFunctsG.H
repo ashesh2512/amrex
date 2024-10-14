@@ -4,6 +4,27 @@
 
 namespace amrex {
 
+namespace detail {
+
+    // call_f_scalar_handler
+
+    template <typename F, typename N>
+    AMREX_GPU_DEVICE AMREX_FORCE_INLINE
+    auto call_f_scalar_handler (F const& f, N i, Gpu::Handler const&)
+        noexcept -> decltype(f(0))
+    {
+        f(i);
+    }
+
+    template <typename F, typename N>
+    AMREX_GPU_DEVICE AMREX_FORCE_INLINE
+    auto call_f_scalar_handler (F const& f, N i, Gpu::Handler const& handler)
+        noexcept -> decltype(f(0,Gpu::Handler{}))
+    {
+        f(i, handler);
+    }
+}
+
 #ifdef AMREX_USE_SYCL
 
 template <typename L>
@@ -738,14 +759,24 @@ std::enable_if_t<MaybeDeviceRunnable<L>::value>
 ParallelFor (Gpu::KernelInfo const&, T n, L&& f) noexcept
 {
     if (amrex::isEmpty(n)) { return; }
-    const auto ec = Gpu::makeExecutionConfig<MT>(n);
-    AMREX_LAUNCH_KERNEL(MT, ec.numBlocks, ec.numThreads, 0, Gpu::gpuStream(),
-    [=] AMREX_GPU_DEVICE () noexcept {
-        for (Long i = Long(blockDim.x)*blockIdx.x+threadIdx.x, stride = Long(blockDim.x)*gridDim.x;
-             i < Long(n); i += stride) {
-            detail::call_f(f, T(i), (Long(n)-i+(Long)threadIdx.x));
+    const auto& nec = Gpu::makeNExecutionConfigs<MT>(n);
+    T ndone = 0;
+    for (auto const& ec : nec) {
+        T nleft = n - ndone;
+        AMREX_LAUNCH_KERNEL(MT, ec.second, MT, 0, Gpu::gpuStream(),
+        [=] AMREX_GPU_DEVICE () noexcept {
+            // This will not overflow, even though nblocks*MT might.                
+            auto tid = T(MT)*T(blockIdx.x)+T(threadIdx.x);
+            if (tid < nleft) {
+                detail::call_f_scalar_handler(f, tid+ndone,
+                    Gpu::Handler(amrex::min((std::uint64_t(nleft)-tid+(std::uint64_t)threadIdx.x),
+                    (std::uint64_t)blockDim.x)));
+            }
+        });
+        if (Long(nleft) > ec.first) {
+            ndone += ec.first;
         }
-    });
+    }
     AMREX_GPU_ERROR_CHECK();
 }
 
